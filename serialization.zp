@@ -1,0 +1,183 @@
+(module "serialization"
+  (export
+    `("serialize" ,serialize)
+    `("deserialize" ,deserialize))
+
+  (serialize-int (lambda (n)
+    (let ((binary (->bytes n)))
+      (++ b{0} (length binary) binary))))
+
+  (deserialize-int (lambda (bv)
+    (let* ((len   (car bv))
+           (bytes (byte-vector:subvector bv 1 (add1 len))))
+      (byte-vector:reduce (lambda (acc x) (+ (arithmetic-shift acc 8) x))
+                          bytes))))
+
+  (serialize-str (lambda (n)
+    (let ((binary (string->byte-vector n)))
+      (++ b{1} (length binary) binary))))
+
+  (deserialize-str (lambda (bv)
+    (let* ((len   (car bv))
+           (bytes (byte-vector:subvector bv 1 (add1 len))))
+      (byte-vector->string bytes))))
+
+  (serialize-char (lambda (ch)
+    (++ b{2} (serialize-int (char->integer ch)))))
+
+  (deserialize-char (lambda (ch)
+    (integer->char (deserialize-int (cdr ch)))))
+
+  (serialize-bool (lambda (b)
+    (++ b{3} (if b 1 0))))
+
+  (deserialize-bool (lambda (b)
+    (truthy? (car b))))
+
+  (serialize-list (lambda (l)
+    (let ((l (map serialize l))
+          (init b{4}))
+      (if (null? l)
+        (++ init 0)
+        (++ init (length l) (apply += l))))))
+
+  (serialize-vector (lambda (l)
+    (let ((l (vector:map serialize l))
+          (init b{5}))
+      (if (null? l)
+        (++ init 0)
+        (++ init (length l) (apply += (vector->list l)))))))
+
+  (serialize-byte-vector (lambda (l)
+    (let ((vec (serialize-vector (byte-vector->vector l))))
+      (++ b{6} (cdr vec)))))
+
+  (deserialize-collec (lambda (l collec) "hacky af"
+    (let ((len (car l)))
+      (let loop ((acc collec)
+                 (l (cdr l)))
+        (if (or (null? l) (eq? (length acc) len))
+          acc
+          (let ((ds (deserialize l)))
+            (loop (+= acc ds) (drop (length (serialize ds)) l))))))))
+
+  (deserialize-list ($ (deserialize-collec % [])))
+  (deserialize-vector ($ (deserialize-collec % {})))
+  (deserialize-byte-vector ($ (deserialize-collec % b{})))
+
+  (serialize-hashmap (lambda (h)
+    (let ((h (hash:kv-map serialize-list h))
+          (init b{7}))
+      (if (null? h)
+        (++ init 0)
+        (++ init (length h) (apply ++ h))))))
+
+  (deserialize-hashmap (lambda (h)
+    (let ((len (car h)))
+      (let loop ((acc #{})
+                 (h (cdr h)))
+        (if (or (null? h) (eq? (length acc) len))
+          acc
+          (let* ((kv (deserialize h))
+                 (h  (drop (length (serialize kv)) h)))
+            (loop (hash:merge acc (apply make-hash kv)) h)))))))
+
+  (serialize-symbol (lambda (s)
+    (++ b{8} (serialize-str (symbol->string s)))))
+
+  (deserialize-symbol (lambda (s)
+    (string->symbol (deserialize-str (cdr s)))))
+
+  (serialize-small (lambda (s)
+    (++ b{9} (serialize-int s))))
+
+  (deserialize-small (lambda (s)
+    (deserialize-int (cdr s))))
+
+  (serialize-complex (lambda (c)
+    (++ b{10} (serialize-list (list (real c) (imaginary c))))))
+
+  (deserialize-complex (lambda (c)
+    (let ((c (deserialize-list (cdr c))))
+      (+ (car c) (* (cadr c) (sqrt -1))))))
+
+  (serialize-rational (lambda (r)
+    (++ b{11} (serialize-list (list (numerator r) (denominator r))))))
+
+  (deserialize-rational (lambda (r)
+    (let ((r (deserialize-list (cdr r))))
+      (/ (* 1/1 (car r)) (cadr r)))))
+
+  (serialize-float (lambda (f)
+    (let ((binary (->bytes f)))
+      (++ b{12} (->bytes f)))))
+
+  (deserialize-float (lambda (f)
+    (bytes->float f)))
+
+  (serialize-nil (lambda () b{13}))
+
+  (deserialize-nil (lambda () (nil)))
+
+  (serialize-primitive (lambda (p)
+    (++ b{14} (serialize-str (doc p)))))
+
+  (deserialize-primitive (lambda (p)
+    (let ((str (deserialize-str (cdr p))))
+        ((env->hashmap *global-env*) str))))
+
+  (serialize-function (lambda (f)
+    (++ b{15} (serialize-str (function:name f))
+              (serialize-list (function:args f))
+              (serialize-str (function:docstring f))
+              (serialize-list (function:body f)))))
+
+  (deserialize-function (lambda (f)
+    (let* ((name (deserialize-str (cdr f)))
+           (f    (drop (length (serialize name)) f))
+           (args (deserialize-list (cdr f)))
+           (f    (drop (length (serialize args)) f))
+           (doc  (deserialize-str (cdr f)))
+           (f    (drop (length (serialize doc)) f))
+           (body  (deserialize-list (cdr f))))
+    (list 'define (cons (string->symbol name) args) doc (car body)))))
+
+  (serialize (lambda (el)
+    (case (typeof el)
+      (("integer") (serialize-int el))
+      (("string") (serialize-str el))
+      (("character") (serialize-char el))
+      (("boolean") (serialize-bool el))
+      (("list") (serialize-list el))
+      (("vector") (serialize-vector el))
+      (("bytevector") (serialize-byte-vector el))
+      (("hashmap") (serialize-hashmap el))
+      (("atom" "symbol") (serialize-symbol el))
+      (("small") (serialize-small el))
+      (("complex") (serialize-complex el))
+      (("rational") (serialize-rational el))
+      (("float") (serialize-float el))
+      (("nil") (serialize-nil))
+      (("primitive") (serialize-primitive el))
+      (("function") (serialize-function el))
+      (else => (lambda (x) (error "serialize" "Cannot pickle" x))))))
+
+  (deserialize (lambda (el)
+    (case (car el)
+      ((0) (deserialize-int (cdr el)))
+      ((1) (deserialize-str (cdr el)))
+      ((2) (deserialize-char (cdr el)))
+      ((3) (deserialize-bool (cdr el)))
+      ((4) (deserialize-list (cdr el)))
+      ((5) (deserialize-vector (cdr el)))
+      ((6) (deserialize-byte-vector (cdr el)))
+      ((7) (deserialize-hashmap (cdr el)))
+      ((8) (deserialize-symbol (cdr el)))
+      ((9) (deserialize-small (cdr el)))
+      ((10) (deserialize-complex (cdr el)))
+      ((11) (deserialize-rational (cdr el)))
+      ((12) (deserialize-float (cdr el)))
+      ((13) (deserialize-nil))
+      ((14) (deserialize-primitive (cdr el)))
+      ((15) (deserialize-function (cdr el)))
+      (else => (lambda (x) (error "deserialize" "Cannot unpickle" x)))))))
