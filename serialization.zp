@@ -143,6 +143,12 @@
     (list 'define (cons (string->symbol name) args) doc (car body)))))
 
   (serialize (lambda (el)
+    "serializes any zepto element <par>el</par>.
+
+     params:
+      - el: the element to serialize
+     complexity: O(n)
+     returns: a byte-vector"
     (case (typeof el)
       (("integer") (serialize-int el))
       (("string") (serialize-str el))
@@ -163,6 +169,12 @@
       (else => (lambda (x) (error "serialize" "Cannot pickle" x))))))
 
   (deserialize (lambda (el)
+    "deserializes a byte-vector created by <fun>serialization:serialize</fun>.
+
+     params:
+       - el: the byte-vector to deserialize
+     complexity: O(n)
+     returns: the deserialized zepto data structure"
     (case (car el)
       ((0) (deserialize-int (cdr el)))
       ((1) (deserialize-str (cdr el)))
