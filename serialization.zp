@@ -130,7 +130,8 @@
     (++ b{15} (serialize-str (function:name f))
               (serialize-list (function:args f))
               (serialize-str (function:docstring f))
-              (serialize-list (function:body f)))))
+              (serialize-list (function:body f))
+              b{0 0 0 0 0 0 0 0 0})))
 
   (deserialize-function (lambda (f)
     (let* ((name (deserialize-str (cdr f)))
